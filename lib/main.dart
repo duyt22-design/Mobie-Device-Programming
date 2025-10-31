@@ -81,11 +81,47 @@ class _MainScreenState extends State<MainScreen> {
   int _currentIndex = 0;
   final UserProfile userProfile = UserProfile();
   late PageController _pageController;
+  final _dbService = DatabaseService();
 
   @override
   void initState() {
     super.initState();
     _pageController = PageController(initialPage: _currentIndex);
+    _loadUserProfile(); // Load user profile khi khởi tạo
+  }
+  
+  // Load user profile từ server
+  Future<void> _loadUserProfile() async {
+    try {
+      debugPrint('🔄 Loading user profile in MainScreen...');
+      final currentUser = await _dbService.getCurrentUser();
+      if (currentUser != null && currentUser['id'] != null) {
+        debugPrint('📡 Fetching user data for ID: ${currentUser['id']}');
+        final userData = await _dbService.fetchUserById(currentUser['id']);
+        if (userData != null && mounted) {
+          debugPrint('✅ User profile loaded: ${userData['name']}');
+          setState(() {
+            userProfile.name = userData['name'] ?? userProfile.name;
+            userProfile.email = userData['email'] ?? userProfile.email;
+            userProfile.totalTasksCompleted = userData['totalTasksCompleted'] ?? 0;
+            userProfile.averageScore = (userData['averageScore'] ?? 0.0).toDouble();
+            userProfile.rank = userData['rank'] ?? 0;
+          });
+          debugPrint('📊 User stats: Tasks=${userProfile.totalTasksCompleted}, Score=${userProfile.averageScore}, Rank=${userProfile.rank}');
+        } else {
+          debugPrint('⚠️ Failed to fetch user data from server');
+        }
+      } else {
+        debugPrint('⚠️ No current user found in MainScreen');
+      }
+    } catch (e) {
+      debugPrint('❌ Error loading user profile in MainScreen: $e');
+    }
+  }
+  
+  // Public method để reload user profile từ bên ngoài
+  Future<void> reloadUserProfile() async {
+    await _loadUserProfile();
   }
 
   @override
@@ -98,6 +134,11 @@ class _MainScreenState extends State<MainScreen> {
     setState(() {
       _currentIndex = index;
     });
+    
+    // Reload user profile khi chuyển sang tab Profile
+    if (index == 1) {
+      _loadUserProfile();
+    }
   }
 
   void _onBottomNavTapped(int index) {
@@ -261,58 +302,109 @@ class _TaskListScreenState extends State<TaskListScreen> {
     super.initState();
     userProfile = widget.userProfile ?? UserProfile();
     _loadTasks();
+    _loadInitialUserData(); // Load user data khi mở screen
+  }
+  
+  // Load user data khi mở màn hình
+  Future<void> _loadInitialUserData() async {
+    await _reloadUserProfile();
+  }
+
+  // Reload user profile from server
+  Future<void> _reloadUserProfile() async {
+    try {
+      debugPrint('🔄 Reloading user profile...');
+      final currentUser = await _dbService.getCurrentUser();
+      if (currentUser != null && currentUser['id'] != null) {
+        debugPrint('📡 Fetching user data for ID: ${currentUser['id']}');
+        final userData = await _dbService.fetchUserById(currentUser['id']);
+        if (userData != null && mounted) {
+          debugPrint('✅ User data fetched: ${userData['name']}');
+          debugPrint('   Tasks completed: ${userData['totalTasksCompleted']}');
+          debugPrint('   Average score: ${userData['averageScore']}');
+          debugPrint('   Rank: ${userData['rank']}');
+          
+          setState(() {
+            userProfile.name = userData['name'] ?? userProfile.name;
+            userProfile.email = userData['email'] ?? userProfile.email;
+            userProfile.totalTasksCompleted = userData['totalTasksCompleted'] ?? 0;
+            userProfile.averageScore = (userData['averageScore'] ?? 0.0).toDouble();
+            userProfile.rank = userData['rank'] ?? 0;
+          });
+          
+          debugPrint('✅ User profile updated in UI');
+        } else {
+          debugPrint('⚠️ Failed to fetch user data or widget not mounted');
+        }
+      } else {
+        debugPrint('⚠️ No current user found for reload');
+      }
+    } catch (e) {
+      debugPrint('❌ Error reloading user profile: $e');
+    }
   }
 
   Future<void> _loadTasks() async {
+    debugPrint('🔄 Reloading tasks...');
     setState(() => _isLoading = true);
     
     try {
       final tasksData = await _dbService.fetchTasksFromAPI();
+      debugPrint('📡 Fetched ${tasksData.length} tasks from API');
       
       // Load completed task IDs
       final completedIds = await _dbService.fetchCompletedTaskIds();
+      debugPrint('✅ Completed task IDs: $completedIds');
+      debugPrint('   Count: ${completedIds.length}');
       
-      setState(() {
-        tasks = tasksData.map<DrawingTask>((data) {
-          final taskId = int.tryParse(data['id'].toString()) ?? 0;
-          final isCompleted = completedIds.contains(taskId);
+      if (mounted) {
+        setState(() {
+          tasks = tasksData.map<DrawingTask>((data) {
+            final taskId = int.tryParse(data['id'].toString()) ?? 0;
+            final isCompleted = completedIds.contains(taskId);
+            
+            // Map task type
+            TaskType type = TaskType.freeDrawing;
+            final taskType = data['type']?.toString().toLowerCase() ?? '';
+            if (taskType.contains('circle')) {
+              type = TaskType.colorCircle;
+            } else if (taskType.contains('square')) {
+              type = TaskType.colorSquare;
+            } else if (taskType.contains('star')) {
+              type = TaskType.colorStar;
+            } else if (taskType.contains('heart')) {
+              type = TaskType.colorHeart;
+            } else if (taskType.contains('house')) {
+              type = TaskType.colorHouse;
+            } else if (taskType.contains('rainbow')) {
+              type = TaskType.rainbow;
+            }
+            
+            return DrawingTask(
+              id: data['id'].toString(),
+              title: data['title'] ?? 'Task',
+              description: data['description'] ?? '',
+              type: type,
+              timeLimit: (data['timeLimit'] as int?) ?? 300,
+              isCompleted: isCompleted, // Set completed status from database
+            );
+          }).toList();
+          _completedTaskIds = completedIds;
+          _isLoading = false;
           
-          // Map task type
-          TaskType type = TaskType.freeDrawing;
-          final taskType = data['type']?.toString().toLowerCase() ?? '';
-          if (taskType.contains('circle')) {
-            type = TaskType.colorCircle;
-          } else if (taskType.contains('square')) {
-            type = TaskType.colorSquare;
-          } else if (taskType.contains('star')) {
-            type = TaskType.colorStar;
-          } else if (taskType.contains('heart')) {
-            type = TaskType.colorHeart;
-          } else if (taskType.contains('house')) {
-            type = TaskType.colorHouse;
-          } else if (taskType.contains('rainbow')) {
-            type = TaskType.rainbow;
-          }
-          
-          return DrawingTask(
-            id: data['id'].toString(),
-            title: data['title'] ?? 'Task',
-            description: data['description'] ?? '',
-            type: type,
-            timeLimit: (data['timeLimit'] as int?) ?? 300,
-            isCompleted: isCompleted, // Set completed status from database
-          );
-        }).toList();
-        _completedTaskIds = completedIds;
-        _isLoading = false;
-      });
+          final completedCount = tasks.where((t) => t.isCompleted).length;
+          debugPrint('✅ Tasks reloaded: ${tasks.length} total, $completedCount completed');
+        });
+      }
     } catch (e) {
-      debugPrint('Error loading tasks: $e');
+      debugPrint('❌ Error loading tasks: $e');
       // Fallback to default tasks
-      setState(() {
-        tasks = _getDefaultTasks();
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          tasks = _getDefaultTasks();
+          _isLoading = false;
+        });
+      }
     }
   }
 
@@ -510,13 +602,36 @@ class _TaskListScreenState extends State<TaskListScreen> {
                         ),
                       );
                       if (result != null && result is Map<String, dynamic>) {
-                        setState(() {
-                          task.isCompleted = true;
-                          userProfile.addHistory(result['history'] as TaskHistory);
-                        });
+                        // Check if task was actually completed
+                        final wasCompleted = result['completed'] == true;
                         
-                        // Reload tasks to get updated status
-                        _loadTasks();
+                        if (wasCompleted) {
+                          debugPrint('✅ Task was completed, reloading data...');
+                          
+                          // Reload tasks to get updated status from server FIRST
+                          await _loadTasks();
+                          
+                          // Reload user profile data from server
+                          await _reloadUserProfile();
+                          
+                          // Force UI update - tasks list should already be updated from _loadTasks
+                          if (mounted) {
+                            setState(() {
+                              // Add history if provided
+                              if (result['history'] != null) {
+                                userProfile.addHistory(result['history'] as TaskHistory);
+                              }
+                            });
+                            
+                            // Calculate completed count after reload
+                            final completedCount = tasks.where((t) => t.isCompleted).length;
+                            debugPrint('🔄 UI updated: Completed tasks = $completedCount/${tasks.length}');
+                            debugPrint('   User profile: Tasks=${userProfile.totalTasksCompleted}, Score=${userProfile.averageScore}');
+                          }
+                        } else {
+                          debugPrint('⚠️ Task completion returned false, not updating UI');
+                          debugPrint('   Result: $result');
+                        }
                       }
                     },
                   ),
@@ -941,10 +1056,40 @@ class _DrawingScreenState extends State<DrawingScreen> {
     
     // Lưu vào database qua API
     Map<String, dynamic>? updatedUser;
+    Map<String, dynamic>? currentUser;
+    bool taskHistorySaved = false;
+    bool taskCompletionSaved = false;
+    
     try {
-      final currentUser = await DatabaseService().getCurrentUser();
-      if (currentUser != null) {
-        final success = await DatabaseService().saveTaskHistory(
+      currentUser = await DatabaseService().getCurrentUser();
+      if (currentUser == null || currentUser['id'] == null) {
+        debugPrint('❌ Cannot save task: User not found or userId is null');
+        debugPrint('   Current user: $currentUser');
+        debugPrint('   ⚠️ User cần đăng nhập lại!');
+        
+        // Show error message to user
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Row(
+                children: [
+                  Icon(Icons.error, color: Colors.white),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text('⚠️ Vui lòng đăng nhập lại để lưu nhiệm vụ'),
+                  ),
+                ],
+              ),
+              backgroundColor: Colors.red,
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+      } else {
+        debugPrint('✅ Saving task history for user ID: ${currentUser['id']}');
+        
+        // Lưu lịch sử task
+        final historySuccess = await DatabaseService().saveTaskHistory(
           userId: currentUser['id'],
           taskTitle: widget.task.title,
           score: score,
@@ -952,20 +1097,53 @@ class _DrawingScreenState extends State<DrawingScreen> {
           drawingData: drawingBase64, // Lưu hình vẽ
         );
         
+        taskHistorySaved = historySuccess;
+        debugPrint('📜 Task history saved: $historySuccess');
+        
+        // Đánh dấu task đã hoàn thành
+        final taskId = int.tryParse(widget.task.id);
+        if (taskId != null) {
+          final completionSuccess = await DatabaseService().markTaskAsCompleted(taskId);
+          taskCompletionSaved = completionSuccess;
+          debugPrint('✅ Task completion saved: $completionSuccess');
+        }
+        
         // Lấy thông tin user mới sau khi cập nhật điểm và rank
-        if (success) {
+        if (historySuccess) {
           updatedUser = await DatabaseService().fetchUserById(currentUser['id']);
+          debugPrint('👤 User data refreshed: ${updatedUser?['name']}');
+          debugPrint('   Total tasks: ${updatedUser?['totalTasksCompleted']}');
+          debugPrint('   Average score: ${updatedUser?['averageScore']}');
+          debugPrint('   Rank: ${updatedUser?['rank']}');
+          
+          // Update widget.userProfile với dữ liệu mới
+          if (updatedUser != null && mounted) {
+            final userData = updatedUser;
+            setState(() {
+              widget.userProfile.name = userData['name'] ?? widget.userProfile.name;
+              widget.userProfile.email = userData['email'] ?? widget.userProfile.email;
+              widget.userProfile.totalTasksCompleted = userData['totalTasksCompleted'] ?? 0;
+              widget.userProfile.averageScore = (userData['averageScore'] ?? 0.0).toDouble();
+              widget.userProfile.rank = userData['rank'] ?? 0;
+            });
+            debugPrint('✅ Widget userProfile updated');
+          }
         }
       }
     } catch (e) {
-      debugPrint('Error saving task history: $e');
+      debugPrint('❌ Error saving task: $e');
     }
     
     if (!mounted) return;
     
+    // Capture values for use in dialog
+    final savedHistory = taskHistorySaved;
+    final savedCompletion = taskCompletionSaved;
+    final hasUser = currentUser != null && currentUser['id'] != null;
+    
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: Row(
           children: [
             const Icon(Icons.celebration, color: Colors.amber, size: 32),
@@ -1049,21 +1227,57 @@ class _DrawingScreenState extends State<DrawingScreen> {
         actions: [
           TextButton(
             onPressed: () async {
-              // Save task completion to database
-              final taskId = int.tryParse(widget.task.id);
-              if (taskId != null) {
-                try {
-                  await DatabaseService().markTaskAsCompleted(taskId);
-                } catch (e) {
-                  debugPrint('Error marking task as completed: $e');
+              Navigator.of(dialogContext).pop();
+              
+              // Show success/error message using captured values
+              if (mounted) {
+                if (hasUser && (savedHistory || savedCompletion)) {
+                  final allSaved = savedHistory && savedCompletion;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Row(
+                        children: [
+                          const Icon(Icons.check_circle, color: Colors.white),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              allSaved
+                                  ? '✅ Đã lưu nhiệm vụ thành công!'
+                                  : '⚠️ Đã lưu nhưng có thể có lỗi một phần',
+                            ),
+                          ),
+                        ],
+                      ),
+                      backgroundColor: allSaved ? Colors.green : Colors.orange,
+                      duration: const Duration(seconds: 3),
+                    ),
+                  );
+                } else if (!hasUser) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Row(
+                        children: [
+                          Icon(Icons.warning, color: Colors.white),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text('⚠️ Nhiệm vụ không được lưu. Vui lòng đăng nhập lại.'),
+                          ),
+                        ],
+                      ),
+                      backgroundColor: Colors.red,
+                      duration: Duration(seconds: 3),
+                    ),
+                  );
                 }
               }
               
-              Navigator.of(context).pop();
-              Navigator.of(context).pop({
-                'completed': true,
-                'history': history,
-              });
+              // Return to task list
+              if (mounted) {
+                Navigator.of(dialogContext).pop({
+                  'completed': hasUser && (savedHistory || savedCompletion),
+                  'history': history,
+                });
+              }
             },
             child: const Text('OK'),
           ),
@@ -1123,26 +1337,51 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   
   Future<void> _loadUserData() async {
     try {
-      final user = await _dbService.getCurrentUser();
-      if (user != null && mounted) {
-        setState(() {
-          _nameController.text = user['name'] ?? widget.userProfile.name;
-          _emailController.text = user['email'] ?? widget.userProfile.email;
-          widget.userProfile.name = user['name'] ?? widget.userProfile.name;
-          widget.userProfile.email = user['email'] ?? widget.userProfile.email;
-        });
+      final currentUser = await _dbService.getCurrentUser();
+      if (currentUser != null && currentUser['id'] != null) {
+        debugPrint('🔄 Loading user data for ID: ${currentUser['id']}');
+        
+        // Load fresh data from server
+        final user = await _dbService.fetchUserById(currentUser['id']);
+        if (user != null && mounted) {
+          debugPrint('✅ User data loaded from server: ${user['name']}');
+          setState(() {
+            _nameController.text = user['name'] ?? widget.userProfile.name;
+            _emailController.text = user['email'] ?? widget.userProfile.email;
+            widget.userProfile.name = user['name'] ?? widget.userProfile.name;
+            widget.userProfile.email = user['email'] ?? widget.userProfile.email;
+            widget.userProfile.totalTasksCompleted = user['totalTasksCompleted'] ?? 0;
+            widget.userProfile.averageScore = (user['averageScore'] ?? 0.0).toDouble();
+            widget.userProfile.rank = user['rank'] ?? 0;
+          });
+          debugPrint('📊 User stats: Tasks=${widget.userProfile.totalTasksCompleted}, Score=${widget.userProfile.averageScore}, Rank=${widget.userProfile.rank}');
+        } else if (mounted) {
+          debugPrint('⚠️ Failed to fetch user from server, using local data');
+          // Fallback to local user data
+          setState(() {
+            _nameController.text = currentUser['name'] ?? widget.userProfile.name;
+            _emailController.text = currentUser['email'] ?? widget.userProfile.email;
+            widget.userProfile.name = currentUser['name'] ?? widget.userProfile.name;
+            widget.userProfile.email = currentUser['email'] ?? widget.userProfile.email;
+          });
+        }
       } else {
+        debugPrint('⚠️ No current user found');
+        if (mounted) {
+          setState(() {
+            _nameController.text = widget.userProfile.name;
+            _emailController.text = widget.userProfile.email;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('❌ Error loading user data: $e');
+      if (mounted) {
         setState(() {
           _nameController.text = widget.userProfile.name;
           _emailController.text = widget.userProfile.email;
         });
       }
-    } catch (e) {
-      debugPrint('Error loading user data: $e');
-      setState(() {
-        _nameController.text = widget.userProfile.name;
-        _emailController.text = widget.userProfile.email;
-      });
     }
   }
 

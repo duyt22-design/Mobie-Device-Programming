@@ -12,8 +12,9 @@ class DatabaseService {
     if (kIsWeb) {
       return 'http://localhost:5000/api'; // Web
     } else {
-      // Cố định cho Android Emulator để đảm bảo kết nối ổn định
-      return 'http://10.0.2.2:5000/api';
+      // Thử auto-detect IP trước, nếu không thì dùng emulator
+      final detectedUrl = _autoDetectAndroidUrl();
+      return detectedUrl;
     }
   }
   
@@ -21,12 +22,13 @@ class DatabaseService {
   static String _autoDetectAndroidUrl() {
     // Danh sách IP có thể có của máy tính (thay đổi theo mạng)
     final List<String> possibleIPs = [
-      '10.19.252.97',   // IP hiện tại của máy tính
-      '10.215.60.97',   // IP cũ của máy tính
-      '192.168.1.249',  // IP mạng gia đình
-      '192.168.0.100',  // IP phổ biến khác
-      '192.168.1.100',  // IP phổ biến khác
-      '10.0.2.2',       // Android Emulator
+      '192.168.10.107',  // IP hiện tại của máy tính (mới nhất)
+      '10.19.252.97',    // IP cũ của máy tính
+      '10.215.60.97',    // IP cũ khác
+      '192.168.1.249',   // IP mạng gia đình
+      '192.168.0.100',   // IP phổ biến khác
+      '192.168.1.100',    // IP phổ biến khác
+      '10.0.2.2',        // Android Emulator (dùng nếu không tìm thấy)
     ];
     
     // Thử kết nối từng IP để tìm server
@@ -485,7 +487,18 @@ class DatabaseService {
       if (response.statusCode == 200) {
         // Lưu thông tin đăng nhập
         if (data['user'] != null) {
+          print('🔐 Saving user session after login...');
           await saveUserSession(data['user']);
+          
+          // Verify session saved
+          final verifyUser = await getCurrentUser();
+          if (verifyUser != null && verifyUser['id'] != null) {
+            print('✅ Session verified: User ID ${verifyUser['id']}');
+          } else {
+            print('⚠️ WARNING: Session not saved correctly!');
+          }
+        } else {
+          print('⚠️ WARNING: No user data in login response');
         }
         return {'success': true, 'user': data['user'], 'message': data['message']};
       } else {
@@ -517,27 +530,61 @@ class DatabaseService {
 
   // Lưu session người dùng
   Future<void> saveUserSession(Map<String, dynamic> user) async {
-    final p = await prefs;
-    await p.setInt('userId', user['id']);
-    await p.setString('userName', user['name']);
-    await p.setString('userEmail', user['email']);
-    await p.setString('userRole', user['role'] ?? 'user');
-    await p.setBool('isLoggedIn', true);
+    try {
+      final p = await prefs;
+      final userId = user['id'];
+      
+      if (userId == null) {
+        print('⚠️ Warning: User ID is null, cannot save session');
+        print('   User data: $user');
+        return;
+      }
+      
+      await p.setInt('userId', userId);
+      await p.setString('userName', user['name'] ?? '');
+      await p.setString('userEmail', user['email'] ?? '');
+      await p.setString('userRole', user['role'] ?? 'user');
+      await p.setBool('isLoggedIn', true);
+      
+      print('✅ User session saved: ${user['name']} (ID: $userId)');
+    } catch (e) {
+      print('❌ Error saving user session: $e');
+    }
   }
 
   // Lấy thông tin user hiện tại
   Future<Map<String, dynamic>?> getCurrentUser() async {
-    final p = await prefs;
-    final isLoggedIn = p.getBool('isLoggedIn') ?? false;
-    
-    if (!isLoggedIn) return null;
+    try {
+      final p = await prefs;
+      final isLoggedIn = p.getBool('isLoggedIn') ?? false;
+      
+      if (!isLoggedIn) {
+        print('⚠️ User not logged in');
+        return null;
+      }
 
-    return {
-      'id': p.getInt('userId'),
-      'name': p.getString('userName'),
-      'email': p.getString('userEmail'),
-      'role': p.getString('userRole'),
-    };
+      final userId = p.getInt('userId');
+      if (userId == null) {
+        print('⚠️ userId is null in SharedPreferences');
+        print('   isLoggedIn: $isLoggedIn');
+        print('   userName: ${p.getString('userName')}');
+        print('   userEmail: ${p.getString('userEmail')}');
+        return null;
+      }
+
+      final user = {
+        'id': userId,
+        'name': p.getString('userName') ?? '',
+        'email': p.getString('userEmail') ?? '',
+        'role': p.getString('userRole') ?? 'user',
+      };
+      
+      print('✅ Current user: ${user['name']} (ID: ${user['id']})');
+      return user;
+    } catch (e) {
+      print('❌ Error getting current user: $e');
+      return null;
+    }
   }
 
   // Kiểm tra đã đăng nhập chưa
@@ -927,19 +974,20 @@ class DatabaseService {
       final data = json.decode(response.body);
 
       if (response.statusCode == 200 && data['success'] == true) {
-        // Lưu thông tin user vào SharedPreferences
-        final prefs = await SharedPreferences.getInstance();
         final user = data['user'];
         
-        await prefs.setInt('userId', user['id']);
-        await prefs.setString('userName', user['name']);
-        await prefs.setString('userEmail', user['email']);
-        await prefs.setString('userRole', user['role'] ?? 'user');
-        if (user['faceData'] != null) {
-          await prefs.setString('faceData', user['faceData']);
-        }
-        if (user['faceEnabled'] != null) {
-          await prefs.setInt('faceEnabled', user['faceEnabled']);
+        // Lưu session bằng method chung
+        await saveUserSession(user);
+        
+        // Lưu thêm face data nếu có
+        if (user['faceData'] != null || user['faceEnabled'] != null) {
+          final prefs = await SharedPreferences.getInstance();
+          if (user['faceData'] != null) {
+            await prefs.setString('faceData', user['faceData']);
+          }
+          if (user['faceEnabled'] != null) {
+            await prefs.setInt('faceEnabled', user['faceEnabled']);
+          }
         }
 
         return {'success': true, 'user': user};

@@ -54,6 +54,9 @@ class GoogleAuthService {
           photoUrl: photoUrl,
         );
         
+        // QUAN TRỌNG: Lưu session cho user đã tồn tại
+        await _dbService.saveUserSession(existingUser);
+        
         return {
           'success': true,
           'user': existingUser,

@@ -59,6 +59,12 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
 
       if (result['success'] == true) {
+        // Đảm bảo session đã được lưu
+        if (result['user'] != null) {
+          await _dbService.saveUserSession(result['user']);
+          debugPrint('✅ Session saved after login');
+        }
+        
         // Đăng nhập thành công, quay về main screen
         Navigator.of(context).pushReplacementNamed('/main');
       } else {
@@ -93,6 +99,16 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
 
       if (result['success'] == true) {
+        // Đảm bảo session đã được lưu
+        if (result['user'] != null) {
+          await _dbService.saveUserSession(result['user']);
+          debugPrint('✅ Google Sign-In session saved');
+          
+          // Verify session
+          final verifyUser = await _dbService.getCurrentUser();
+          debugPrint('🔍 Verified session: ${verifyUser?['name']} (ID: ${verifyUser?['id']})');
+        }
+        
         // Hiển thị thông báo
         final isNewUser = result['isNewUser'] ?? false;
         ScaffoldMessenger.of(context).showSnackBar(
